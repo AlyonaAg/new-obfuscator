@@ -48,28 +48,34 @@ def traverse(node, func_before=None, func_after=None):
     return node
 
 
-def encode_string_literal(node):
-    def encode_string(node):
+def encode_string(node):
+    def encode_string_literal(node):
         if node.type == 'Literal' and isinstance(node.value, str):
             encoded_value = base64.b64encode(node.value.encode('utf-8')).decode('utf-8')
-            all_encode_string.append(encoded_value)
+            try:
+                index = all_encode_string.index(encoded_value)
+            except ValueError:
+                all_encode_string.append(encoded_value)
+                index = len(all_encode_string) - 1
+
             node = esprima.nodes.CallExpression(
                 esprima.nodes.Identifier("decodeBase64"),
-                [esprima.nodes.Literal(len(all_encode_string) - 1, f'"{len(all_encode_string) - 1}"')],
+                [esprima.nodes.Literal(index, f'"{len(all_encode_string) - 1}"')],
             )
         return node
 
-    return traverse(node, func_before=encode_string)
+    return traverse(node, func_before=encode_string_literal)
 
-def obfuscate_code(input_code):
-    ast = esprima.parseScript(input_code)
+
+def obfuscate_code(code):
+    ast = esprima.parseScript(code)
     # print(ast)
 
-    encode_string_literal(ast)
+    encode_string(ast)
     add_decode_array(ast)
     add_decode_function(ast)
 
-    return escodegen.generate(ast)
+    return escodegen.generate(ast, options={'format': {'indent': {'style': ''}, 'newline': '', 'space': ''}})
 
 
 if __name__ == '__main__':
@@ -80,6 +86,7 @@ if __name__ == '__main__':
     function add(a, b) {
     a = "aaaa"
     b = "a - b";
+    с = "aaaa"
         return a + b;
     }
     // decodeBase64("a")
@@ -95,12 +102,6 @@ if __name__ == '__main__':
     print(obfuscated_code)
 
 
-
-
-
-def remove_comments(ast):
-    # Ваш код для удаления комментариев
-    pass
 
 def remove_formatting(ast):
     # Ваш код для удаления символов форматирования
