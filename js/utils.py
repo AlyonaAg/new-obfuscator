@@ -20,3 +20,10 @@ def generate_unique_sequence(length):
 def generate_unique_random_numbers(k, n):
     unique_numbers = sorted(random.sample(range(n), k))
     return unique_numbers
+
+
+def gen_name(all_identifier):
+        name = '_0ib' + str(random.randint(10, 999)) + 'k' + str(random.randint(1000, 9999)) + 's'
+        while name in all_identifier:
+            name = '_0ib' + str(random.randint(10, 999)) + 'k' + str(random.randint(1000, 9999)) + 's'
+        return name

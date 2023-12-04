@@ -9,6 +9,7 @@ all_encode_string = ["ZGVjb2RlVVJJQ29tcG9uZW50KCI="]
 inner_func_and_var = {}
 all_identifier = {}
 func_args = {}
+instructions = []
 
 
 def add_decode_function(ast):
@@ -148,16 +149,10 @@ def encode_string(node):
 
 
 def rename_identifier(node):
-    def gen_name():
-        name = '_0ib' + str(random.randint(10, 99)) + 'k' + str(random.randint(1000, 9999)) + 's'
-        while name in all_identifier:
-            name = '_0ib' + str(random.randint(10, 99)) + 'k' + str(random.randint(1000, 9999)) + 's'
-        return name
-
     def rename(node):
         if node.type == 'Identifier' and node.name in inner_func_and_var:
             if node.name not in all_identifier:
-                all_identifier[node.name] = gen_name()
+                all_identifier[node.name] = utils.gen_name(all_identifier)
 
             node.name = all_identifier[node.name]
         return node
@@ -181,6 +176,22 @@ def collect_identifier(node):
     traverse(node, func_before=collect)
 
 
+def collect_instruction(node):
+    def collect(node):
+        if node.type == 'ExpressionStatement':
+            instructions.append(node)
+        elif node.type == 'ForStatement':
+            instructions.append(node)
+        elif node.type == 'IfStatement':
+            instructions.append(node)
+        elif node.type == 'WhileStatement':
+            instructions.append(node)
+
+        return node
+
+    traverse(node, func_before=collect)
+
+
 def transform_constants(node):
     def get_literal(number):
         literal = esprima.nodes.Literal(abs(number), f'{abs(number)}')
@@ -192,7 +203,7 @@ def transform_constants(node):
         if node.type == 'Literal' and isinstance(node.value, int):
             opt = random.randint(1, 5)
             if opt == 1:
-                number1 = random.randint(1, (node.value + 1) * 10)
+                number1 = random.randint(1, node.value + 1)
                 if number1 < node.value:
                     number2 = number1 - node.value
 
@@ -230,7 +241,7 @@ def transform_constants(node):
 
         return node
 
-    for i in range(random.randint(1, 5)):
+    for i in range(random.randint(1, 3)):
         node = traverse(node, func_before=transform)
     return node
 
@@ -281,6 +292,9 @@ def add_args(node):
                     args_name.append(a.name)
 
             new_args = func_args[node.callee.name]
+            if len(node.arguments) == new_args['count']:
+                return node
+
             args = []
             for i in range(new_args['count']):
                 val = gen_expression(args_name)
@@ -296,6 +310,35 @@ def add_args(node):
     traverse(node, func_before=add_to_declaration)
     traverse(node, func_before=add_to_call)
 
+
+def add_fake_function(ast):
+    def gen_body():
+        body = []
+        for _ in range(random.randint(1, min(len(instructions), 15))):
+            body.append(random.choice(instructions))
+        return esprima.nodes.BlockStatement(body)
+
+    def gen_args():
+        return []
+
+    def gen_func():
+        func_name = utils.gen_name(all_identifier)
+        body = gen_body()
+        args = gen_args()
+
+        return esprima.nodes.FunctionDeclaration(
+            esprima.nodes.Identifier(func_name),
+            args,
+            body,
+            False
+        )
+
+    collect_instruction(ast)
+
+    for _ in range(random.randint(1, min(len(ast.body), 5))):
+        ast.body.insert(random.randint(0, len(ast.body) - 1), gen_func())
+
+
 def obfuscate_code(code):
     ast = esprima.parseScript(code)
     print(ast)
@@ -304,11 +347,12 @@ def obfuscate_code(code):
     encode_string(ast)
     add_decode_array(ast)
     add_decode_function(ast)
+    add_fake_function(ast)
     add_args(ast)
     collect_identifier(ast)
     rename_identifier(ast)
     transform_constants(ast)
-    # print(ast)
+    #print(ast)
 
     return escodegen.generate(ast, options={
         'format': {'indent': {'style': ''}, 'newline': '', 'space': '', 'hexadecimal': True}})
@@ -320,14 +364,9 @@ if __name__ == '__main__':
 
     input_code = """
         function add(a, b) {
-        a = "aaaaaaaaaaaaaaaaa\u002d"
-        c = "-3" + "2"
             return a + b;
         }
         add("a", "b")
-        a , b = 1, 2
-        add(a, b)
-        // decodeBase64("a")
     """
 
     if file_path != "":
@@ -336,5 +375,8 @@ if __name__ == '__main__':
 
     obfuscated_code = obfuscate_code(input_code)
 
+    with open('res.js', 'w') as file:
+        file.write(obfuscated_code)
+
     print("\n\n\n")
-    print(obfuscated_code)
+    #print(obfuscated_code)
