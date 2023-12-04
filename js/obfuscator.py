@@ -8,6 +8,7 @@ from urllib.parse import quote
 all_encode_string = ["ZGVjb2RlVVJJQ29tcG9uZW50KCI="]
 inner_func_and_var = {}
 all_identifier = {}
+func_args = {}
 
 
 def add_decode_function(ast):
@@ -28,6 +29,10 @@ def add_decode_function(ast):
     )
     ast.body.insert(0, decode_replace_encoding.body[0])
 
+    decode_reverse = esprima.parseScript(
+        'function rev(value){ var a=value.split(""); var b=a.reverse(); var c=b.join("");return c;}'
+    )
+    ast.body.insert(0, decode_reverse.body[0])
 
 
 def add_decode_array(ast):
@@ -39,6 +44,18 @@ def add_decode_array(ast):
     right = esprima.nodes.ArrayExpression(encode_string_array)
     expression = esprima.nodes.AssignmentExpression("=", left, right)
     ast.body.insert(0, esprima.nodes.ExpressionStatement(expression))
+
+
+def gen_expression(var_names):
+    opt = random.randint(1 if len(var_names) > 0 else 2, 3)
+    if opt == 1:
+        return esprima.nodes.Identifier(random.choice(var_names))
+    elif opt == 2:
+        val = random.randint(1, 1000)
+        return esprima.nodes.Literal(val, f'{val}')
+    else:
+        val = utils.generate_unique_sequence(random.randint(1, 10))
+        return esprima.nodes.Literal(val, f'"{val}"')
 
 
 def traverse(node, func_before=None, func_after=None):
@@ -105,19 +122,29 @@ def encode_string(node):
             [esprima.nodes.Literal(val, f'"{val}"'), esprima.nodes.Literal(random_sequence, f'"{random_sequence}"')],
         )
 
+    def reverse_encoding(value):
+        val = value[::-1]
+
+        return esprima.nodes.CallExpression(
+            esprima.nodes.Identifier("rev"),
+            [esprima.nodes.Literal(val, f'"{val}"')],
+        )
+
     def encode_string_literal(node):
         if node.type == 'Literal' and isinstance(node.value, str):
-            opt = random.randint(1, 5)
+            opt = random.randint(1, 4)
             if opt == 1:
                 return base64_encoding(node.value)
             elif opt == 2:
                 return unescape_encoding(node.value)
             elif opt == 3:
                 return replace_encoding(node.value)
+            elif opt == 4:
+                return reverse_encoding(node.value)
 
         return node
 
-    return traverse(node, func_before=encode_string_literal)
+    traverse(node, func_before=encode_string_literal)
 
 
 def rename_identifier(node):
@@ -135,7 +162,7 @@ def rename_identifier(node):
             node.name = all_identifier[node.name]
         return node
 
-    return traverse(node, func_before=rename)
+    traverse(node, func_before=rename)
 
 
 def collect_identifier(node):
@@ -151,7 +178,7 @@ def collect_identifier(node):
 
         return node
 
-    return traverse(node, func_before=collect)
+    traverse(node, func_before=collect)
 
 
 def transform_constants(node):
@@ -222,8 +249,52 @@ def split_string(node):
 
         return node
 
-    return traverse(node, func_before=split)
+    traverse(node, func_before=split)
 
+
+def add_args(node):
+    def add_to_declaration(node):
+        if node.type == 'FunctionDeclaration':
+            new_count_arg = random.randint(len(node.params), len(node.params)*2 + 3)
+            idx = utils.generate_unique_random_numbers(len(node.params), new_count_arg)
+
+            func_args[node.id.name] = {'idx': idx, 'count': new_count_arg}
+
+            params = []
+            for i in range(new_count_arg):
+                params.append(esprima.nodes.Identifier(utils.generate_unique_sequence(3)))
+
+            for index, value in enumerate(node.params):
+                params[idx[index]] = value
+
+            node.params = params
+        return node
+
+    def add_to_call(node):
+        if node.type == 'CallExpression':
+            if node.callee.name not in func_args:
+                return node
+
+            args_name = []
+            for a in node.arguments:
+                if a.type == 'Identifier':
+                    args_name.append(a.name)
+
+            new_args = func_args[node.callee.name]
+            args = []
+            for i in range(new_args['count']):
+                val = gen_expression(args_name)
+                args.append(val)
+
+            for index, value in enumerate(node.arguments):
+                args[new_args['idx'][index]] = value
+
+            node.arguments = args
+
+        return node
+
+    traverse(node, func_before=add_to_declaration)
+    traverse(node, func_before=add_to_call)
 
 def obfuscate_code(code):
     ast = esprima.parseScript(code)
@@ -233,6 +304,7 @@ def obfuscate_code(code):
     encode_string(ast)
     add_decode_array(ast)
     add_decode_function(ast)
+    add_args(ast)
     collect_identifier(ast)
     rename_identifier(ast)
     transform_constants(ast)
@@ -253,6 +325,8 @@ if __name__ == '__main__':
             return a + b;
         }
         add("a", "b")
+        a , b = 1, 2
+        add(a, b)
         // decodeBase64("a")
     """
 
@@ -264,13 +338,3 @@ if __name__ == '__main__':
 
     print("\n\n\n")
     print(obfuscated_code)
-
-
-def add_fake_code(ast):
-    # Ваш код для добавления ложного кода
-    pass
-
-
-def modify_control_flow(ast):
-    # Ваш код для изменения потока управления программы
-    pass
