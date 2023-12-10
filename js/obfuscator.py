@@ -377,6 +377,3 @@ if __name__ == '__main__':
 
     with open('res.js', 'w') as file:
         file.write(obfuscated_code)
-
-    print("\n\n\n")
-    #print(obfuscated_code)
