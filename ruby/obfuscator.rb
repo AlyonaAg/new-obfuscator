@@ -1,5 +1,6 @@
 require 'parser/current'
 require 'unparser'
+require 'base64'
 
 $inner_func_and_var = {}
 $all_identifier = {}
@@ -33,16 +34,46 @@ def get_expr(operation, left, right)
     )
 end
 
+def get_parts(input_string)
+  return [input_string] if input_string.length == 1
 
-def traverse(node, &func_before)
+  num_parts = rand(1..(input_string.length / 2) + 1)
+  return [input_string] if num_parts == 1
+
+  split_indices = (1..input_string.length - 1).to_a.sample(num_parts - 1).sort
+
+  parts = split_indices.each_with_index.map do |j, i|
+    prev_index = i.zero? ? 0 : split_indices[i - 1] + 1
+    input_string[prev_index..j]
+  end
+
+  parts << input_string[split_indices.last + 1..-1] if split_indices.last
+  parts
+end
+
+def get_base64_encoding(string)
+  args = [nil, :"decode_base64", Parser::AST::Node.new(:str, [base64(string).to_s])]
+  Parser::AST::Node.new(:send, args)
+end
+
+def base64(input_string)
+  encoded_string = Base64.encode64(input_string)
+  encoded_string.chomp
+end
+
+
+def traverse(node, skip_new, &func_before)
   if func_before.is_a?(Proc)
     new_node = func_before.call(node)
+    if new_node != node && skip_new
+      return new_node
+    end
   end
 
   new_child = new_node.children.dup
   new_child.each_with_index do |value, index|
     if value.is_a?(Parser::AST::Node)
-      new_subnode = traverse(value, &func_before)
+      new_subnode = traverse(value, skip_new, &func_before)
       if new_subnode != new_node
         new_child[index] = new_subnode
       end
@@ -60,14 +91,14 @@ def collect_identifier(node)
 
     if types0.include?(coll_node.type)
       $inner_func_and_var[coll_node.children[0]] = {}
-    elsif types1.include?(coll_node.type)
+    elsif types1.include?(coll_node.type) && coll_node.children[1] != :Base64
       $inner_func_and_var[coll_node.children[1]] = {}
     end
 
     return coll_node
   end
 
-  traverse(node, &collect)
+  traverse(node, false, &collect)
 end
 
 
@@ -104,14 +135,14 @@ def rename_identifier(node)
     return rename_node
   end
 
-  traverse(node, &rename)
+  traverse(node, false, &rename)
 end
 
 
 def transform_constants(node)
   transform = lambda do |transform_node|
-    if transform_node.type == :int && !$transform_const && transform_node.children.length == 1
-      opt = rand(1..7)
+    if transform_node.type == :int && transform_node.children.length == 1
+      opt = rand(1..4)
 
       value = transform_node.children[0].to_s.to_i
       case opt
@@ -139,13 +170,73 @@ def transform_constants(node)
   end
 
 
-  traverse(node, &transform)
+  for i in 1..4
+    node = traverse(node,true, &transform)
+  end
+
+  node
+end
+
+def split_string(node)
+  split = lambda do |split_node|
+    if split_node.type == :str
+      parts = get_parts(split_node.children[0].to_s)
+      if parts.length == 1
+        return split_node
+      end
+
+      left = Parser::AST::Node.new(:str, [parts[0].to_s])
+      parts[1..-1].each do |part|
+        left = Parser::AST::Node.new(:send, [left, :+, Parser::AST::Node.new(:str, [part])])
+      end
+      return left
+    end
+
+    split_node
+  end
+
+  traverse(node, true, &split)
+end
+
+def encoding_string(node)
+  encoding = lambda do |encoding_node|
+    if encoding_node.type == :str
+      opt = rand(1..2)
+      if opt == 1
+        value = encoding_node.children[0].to_s
+        return get_base64_encoding(value)
+      end
+
+      return encoding_node
+    end
+
+    encoding_node
+  end
+
+  traverse(node, true, &encoding)
+end
+
+def add_decode_function(node)
+  f = Unparser.parse("def decode_base64(encoded_string)\nBase64.decode64(encoded_string)\nend")
+
+  new_child = node.children.dup
+  new_child.insert(0, f)
+
+  node.updated(node.type, new_child)
+end
+
+def add_require(node)
+  req = Unparser.parse("require 'base64'")
+  new_child = node.children.dup
+  new_child.insert(0, req)
+
+  node.updated(node.type, new_child)
 end
 
 input_filename = ARGV[0]
 output_filename = ARGV[1]
 
-input_filename = "test2.rb"
+input_filename = "test.rb"
 output_filename = "res.rb"
 
 if input_filename.nil? || output_filename.nil?
@@ -166,9 +257,15 @@ end
 ast = Unparser.parse(file_content)
 ast = ast.dup
 puts ast
+
+ast = add_decode_function(ast)
+ast = split_string(ast)
+ast = encoding_string(ast)
 ast = collect_identifier(ast)
 ast = rename_identifier(ast)
 ast = transform_constants(ast)
+ast = add_require(ast)
+
 
 
 #puts $inner_func_and_var
