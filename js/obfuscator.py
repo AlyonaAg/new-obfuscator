@@ -59,6 +59,55 @@ def gen_expression(var_names):
         return esprima.nodes.Literal(val, f'"{val}"')
 
 
+def negative_expression(expr):
+    return esprima.nodes.UnaryExpression('!', expr)
+
+
+def gen_true_expression():
+    opt = random.randint(1, 4)
+    if opt == 1:
+        val = random.randint(1, 1000)
+        return esprima.nodes.BinaryExpression(
+            '==',
+            esprima.nodes.Literal(val, f'{val}'),
+            esprima.nodes.Literal(val, f'{val}'))
+    if opt == 2:
+        val1 = random.randint(1, 1000)
+        val2 = random.randint(1, 2000)
+        sign = ''
+        if val1 % 2 == 0:
+            sign = '='
+
+        if val1 > val2:
+            return esprima.nodes.BinaryExpression(
+                '>' + sign,
+                esprima.nodes.Literal(val1, f'{val1}'),
+                esprima.nodes.Literal(val2, f'{val2}'))
+        if val1 < val2:
+            return esprima.nodes.BinaryExpression(
+                '<' + sign,
+                esprima.nodes.Literal(val1, f'{val1}'),
+                esprima.nodes.Literal(val2, f'{val2}'))
+    if opt == 3:
+        lenght = random.randint(1, 10)
+        sign = '=='
+        if lenght % 3 == 0:
+            sign = '>='
+        elif lenght % 3 == 1:
+            sign = '<='
+
+        val = utils.generate_unique_sequence(lenght)
+        return esprima.nodes.BinaryExpression(
+            sign,
+            esprima.nodes.StaticMemberExpression(
+                esprima.nodes.Literal(val, f'"{val}"'),
+                esprima.nodes.Identifier('length'),
+            ),
+            esprima.nodes.Literal(lenght, f'{lenght}'))
+    else:
+        return esprima.nodes.Literal(True, 'true')
+
+
 def traverse(node, func_before=None, func_after=None):
     if func_before is not None:
         new_node = func_before(node)
@@ -97,7 +146,7 @@ def encode_string(node):
         )
 
     def unescape_encoding(value):
-        # val = ''.join([f"%{ord(char):02x}" for char in value])
+        val = ''.join([f"%{ord(char):02x}" for char in value])
         val = quote(value, safe='')
 
         return esprima.nodes.CallExpression(
@@ -203,8 +252,8 @@ def transform_constants(node):
         if node.type == 'Literal' and isinstance(node.value, int):
             opt = random.randint(1, 5)
             if opt == 1:
-                number1 = random.randint(1, node.value + 1)
-                if number1 < node.value:
+                number1 = random.randint(1, (node.value + 1)*2)
+                if node.value < number1:
                     number2 = number1 - node.value
 
                     return esprima.nodes.BinaryExpression(
@@ -339,6 +388,55 @@ def add_fake_function(ast):
         ast.body.insert(random.randint(0, len(ast.body) - 1), gen_func())
 
 
+def add_binary_expr(node):
+    def add_binary(node):
+        if node.type == 'IfStatement':
+            opt = random.randint(1, 3)
+            if opt == 1:
+                node.test = esprima.nodes.BinaryExpression(
+                    '&&',
+                    node.test,
+                    gen_true_expression(),
+                )
+            elif opt == 2:
+                node.test = esprima.nodes.BinaryExpression(
+                    '&&',
+                    gen_true_expression(),
+                    node.test,
+                )
+        return node
+
+    for _ in range(random.randint(1, 5)):
+        traverse(node, func_before=add_binary)
+
+
+def add_branch(node):
+    def gen_body():
+        body = []
+        for _ in range(random.randint(1, min(len(instructions), 15))):
+            body.append(random.choice(instructions))
+        return esprima.nodes.BlockStatement(body)
+
+    def gen_fake_branch():
+        opt = random.randint(1, 2)
+        if opt == 1:
+            return esprima.nodes.WhileStatement(
+                negative_expression(gen_true_expression()), gen_body())
+        return esprima.nodes.IfStatement(
+            negative_expression(gen_true_expression()), gen_body(), None)
+
+    def fake_branch(node):
+        opt = random.randint(1, 10)
+        if opt == 1 and node.body is not None \
+               and isinstance(node.body, list) and len(node.body) > 1 :
+            new_item = gen_fake_branch()
+            index = random.randint(0, len(node.body)-1)
+            node.body.insert(index, new_item)
+        return node
+
+    traverse(node, func_before=fake_branch)
+
+
 def obfuscate_code(code):
     ast = esprima.parseScript(code)
     print(ast)
@@ -347,6 +445,7 @@ def obfuscate_code(code):
     encode_string(ast)
     add_decode_array(ast)
     add_decode_function(ast)
+    add_binary_expr(ast)
     add_fake_function(ast)
     add_args(ast)
     collect_identifier(ast)
@@ -367,6 +466,11 @@ if __name__ == '__main__':
             return a + b;
         }
         add("a", "b")
+    """
+
+    input_code = """
+        a = !true
+        if (a) {}
     """
 
     if file_path != "":
