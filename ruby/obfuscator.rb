@@ -4,6 +4,7 @@ require 'base64'
 
 $inner_func_and_var = {}
 $all_identifier = {}
+$instructions = []
 
 def extract_prefix(str)
   match = str.match(/^(@@|@|\$)/)
@@ -53,12 +54,30 @@ end
 
 def get_base64_encoding(string)
   args = [nil, :"decode_base64", Parser::AST::Node.new(:str, [base64(string).to_s])]
-  Parser::AST::Node.new(:send, args)
+  Parser::AST::Node.new(:begin, [Parser::AST::Node.new(:send, args)])
+end
+
+def get_escape_string(string)
+  args = [nil, :"decode_unescape", Parser::AST::Node.new(:str, [escape_string(string).to_s])]
+  Parser::AST::Node.new(:begin, [Parser::AST::Node.new(:send, args)])
+end
+
+def get_reverse_string(string)
+  args = [nil, :"decode_reverse", Parser::AST::Node.new(:str, [reverse_string(string).to_s])]
+  Parser::AST::Node.new(:begin, [Parser::AST::Node.new(:send, args)])
 end
 
 def base64(input_string)
   encoded_string = Base64.encode64(input_string)
   encoded_string.chomp
+end
+
+def escape_string(input_string)
+  input_string.each_byte.map { |byte| "%%%02x" % byte }.join
+end
+
+def reverse_string(input_string)
+  input_string.reverse
 end
 
 
@@ -88,10 +107,11 @@ def collect_identifier(node)
   collect = lambda do |coll_node|
     types0 = [:lvasgn, :gvasgn, :cvasgn, :ivasgn, :arg, :def]
     types1 = [:const]
+    pack = [:Base64, :CGI]
 
     if types0.include?(coll_node.type)
       $inner_func_and_var[coll_node.children[0]] = {}
-    elsif types1.include?(coll_node.type) && coll_node.children[1] != :Base64
+    elsif types1.include?(coll_node.type) && !pack.include?(coll_node.children[1])
       $inner_func_and_var[coll_node.children[1]] = {}
     end
 
@@ -136,6 +156,33 @@ def rename_identifier(node)
   end
 
   traverse(node, false, &rename)
+end
+
+
+def collect_instruction(node)
+  collect = lambda do |collect_node|
+    types = [:lvasgn, :gvasgn, :cvasgn, :ivasgn, :send, :if, :while]
+    if types.include?(collect_node.type)
+      $instructions.push(collect_node)
+    end
+
+    return collect_node
+  end
+
+  traverse(node, false, &collect)
+end
+
+def add_fake_function(node)
+  n = rand(3..10)
+
+  new_child = node.children.dup
+
+  n.times do
+    func = gen_func
+    new_child.insert(rand(0..new_child.length - 1), func)
+  end
+
+  node.updated(node.type, new_child)
 end
 
 
@@ -201,10 +248,16 @@ end
 def encoding_string(node)
   encoding = lambda do |encoding_node|
     if encoding_node.type == :str
-      opt = rand(1..2)
+      opt = rand(1..4)
       if opt == 1
         value = encoding_node.children[0].to_s
         return get_base64_encoding(value)
+      elsif opt == 2
+        value = encoding_node.children[0].to_s
+        return get_escape_string(value)
+      elsif opt == 3
+        value = encoding_node.children[0].to_s
+        return get_reverse_string(value)
       end
 
       return encoding_node
@@ -217,26 +270,49 @@ def encoding_string(node)
 end
 
 def add_decode_function(node)
-  f = Unparser.parse("def decode_base64(encoded_string)\nBase64.decode64(encoded_string)\nend")
+  f1 = Unparser.parse("def decode_base64(encoded_string)\nBase64.decode64(encoded_string)\nend")
+  f2 = Unparser.parse("def decode_unescape(escaped_string)\nCGI.unescape(escaped_string)\nend")
+  f3 = Unparser.parse("def decode_reverse(reverse_string)\nreverse_string.reverse\nend")
 
   new_child = node.children.dup
-  new_child.insert(0, f)
+  new_child.insert(0, f1)
+  new_child.insert(0, f2)
+  new_child.insert(0, f3)
 
   node.updated(node.type, new_child)
 end
 
 def add_require(node)
-  req = Unparser.parse("require 'base64'")
+  req1 = Unparser.parse("require 'base64'")
+  req2 = Unparser.parse("require 'cgi'")
+
   new_child = node.children.dup
-  new_child.insert(0, req)
+  new_child.insert(0, req1)
+  new_child.insert(0, req2)
 
   node.updated(node.type, new_child)
 end
 
+def gen_body
+  $instructions.sample([rand(1..10), $instructions.length].min)
+end
+
+def gen_func()
+  child = [
+    gen_name.to_sym,
+    Parser::AST::Node.new(:args,[Parser::AST::Node.new(:arg, [gen_name.to_sym])],
+    ),
+    Parser::AST::Node.new(:begin, gen_body.dup)
+  ]
+
+  Parser::AST::Node.new(:def, child)
+end
+
+
 input_filename = ARGV[0]
 output_filename = ARGV[1]
 
-input_filename = "test.rb"
+input_filename = "test2.rb"
 output_filename = "res.rb"
 
 if input_filename.nil? || output_filename.nil?
@@ -261,14 +337,18 @@ puts ast
 ast = add_decode_function(ast)
 ast = split_string(ast)
 ast = encoding_string(ast)
+ast = collect_instruction(ast)
+ast = add_fake_function(ast)
 ast = collect_identifier(ast)
 ast = rename_identifier(ast)
 ast = transform_constants(ast)
 ast = add_require(ast)
 
+#pp gen_body
 
 
 #puts $inner_func_and_var
 result_content = Unparser.unparse(ast)
-puts result_content
+result_content = result_content.gsub("\n", ";")
+#puts result_content
 File.open(output_filename, 'w') { |file| file.write(result_content) }
